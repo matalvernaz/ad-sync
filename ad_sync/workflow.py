@@ -47,22 +47,30 @@ def process_episode(
         logger.warning("AudioVault has no results for show: %r", series_title)
         return False
 
-    match = find_season(results, series_title, season)
-    if not match:
+    candidates = find_season(results, series_title, season)
+    if not candidates:
         logger.warning("No season %d entry found for %r.", season, series_title)
         return False
 
     # Season zips are cached by download URL so we only fetch each season once.
+    # Each candidate gets its own extract subdirectory so different zips don't
+    # overwrite each other's extracted contents.
     zip_cache_dir = config.cache_dir / "shows" / _safe_dirname(series_title)
-    zip_path = _get_cached(client, match["url"], zip_cache_dir)
 
-    extract_dir = zip_cache_dir / f"season_{season:02d}"
-    audio_path = extract_episode(zip_path, extract_dir, episode)
-    if not audio_path:
-        logger.warning("Could not locate E%02d audio in download.", episode)
-        return False
+    for candidate in candidates:
+        zip_path = _get_cached(client, candidate["url"], zip_cache_dir)
+        extract_dir = zip_cache_dir / f"season_{season:02d}" / _safe_dirname(candidate["name"])
+        audio_path = extract_episode(zip_path, extract_dir, episode)
+        if not audio_path:
+            logger.warning(
+                "E%02d not found in %r — trying next candidate.", episode, candidate["name"]
+            )
+            continue
+        if _align_and_keep(config, video_path, audio_path):
+            return True
+        logger.info("Candidate %r below threshold — trying next.", candidate["name"])
 
-    return _align_and_keep(config, video_path, audio_path)
+    return False
 
 
 def process_movie(
@@ -84,15 +92,20 @@ def process_movie(
         logger.warning("AudioVault has no results for movie: %r", movie_title)
         return False
 
-    match = find_movie(results, movie_title, movie_year)
-    if not match:
+    candidates = find_movie(results, movie_title, movie_year)
+    if not candidates:
         logger.warning("No suitable movie match found for %r.", movie_title)
         return False
 
     movie_cache_dir = config.cache_dir / "movies"
-    audio_path = _get_cached(client, match["url"], movie_cache_dir)
 
-    return _align_and_keep(config, video_path, audio_path)
+    for candidate in candidates:
+        audio_path = _get_cached(client, candidate["url"], movie_cache_dir)
+        if _align_and_keep(config, video_path, audio_path):
+            return True
+        logger.info("Candidate %r below threshold — trying next.", candidate["name"])
+
+    return False
 
 
 # ------------------------------------------------------------------

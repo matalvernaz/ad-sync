@@ -23,13 +23,17 @@ _AUDIO_EXTS = {".mp3", ".m4a", ".opus", ".wav", ".aac", ".flac", ".ac3", ".mka"}
 # Title / season matching
 # ------------------------------------------------------------------
 
-def find_season(results: list[dict], title: str, season: int) -> Optional[dict]:
+def find_season(results: list[dict], title: str, season: int) -> list[dict]:
     """
-    Return the best result from *results* that matches *title* and *season*.
+    Return all results from *results* that plausibly match *title* and *season*,
+    ranked by title similarity (best first).
 
-    Results are scored by title overlap; season must appear literally.
-    For season 1, also considers year-only entries (e.g. "Ted (2024)") that
-    AudioVault sometimes uses instead of "Ted - Season 1 (2024)".
+    Pass 1 returns candidates that explicitly name the season (e.g. "Season 2").
+    Pass 2 (season 1 only) appends year-only entries (e.g. "Ted (2024)") as
+    lower-priority fallbacks, for shows AudioVault hasn't split into seasons yet.
+
+    The caller should try each candidate in order, stopping on the first that
+    aligns above the score threshold.
     """
     season_tokens = {
         f"season {season:02d}",
@@ -41,26 +45,22 @@ def find_season(results: list[dict], title: str, season: int) -> Optional[dict]:
 
     title_lower = title.lower()
 
-    def _best_above_threshold(candidates: list[dict], threshold: float) -> Optional[dict]:
+    def _ranked_above(candidates: list[dict], threshold: float) -> list[dict]:
         scored = [(_title_similarity(title_lower, r["name"].lower()), r) for r in candidates]
         scored.sort(key=lambda x: x[0], reverse=True)
-        if not scored:
-            return None
-        best_score, best = scored[0]
-        if best_score < threshold:
+        kept = [(s, r) for s, r in scored if s >= threshold]
+        for s, r in kept:
+            logger.info("Season candidate: %r (score %.2f)", r["name"], s)
+        if scored and not kept:
             logger.warning(
                 "Best season match %r has low similarity (%.2f) — skipping.",
-                best["name"], best_score,
+                scored[0][1]["name"], scored[0][0],
             )
-            return None
-        logger.info("Best season match: %r (score %.2f)", best["name"], best_score)
-        return best
+        return [r for _, r in kept]
 
     # Pass 1: results that explicitly name the season.
     with_token = [r for r in results if any(tok in r["name"].lower() for tok in season_tokens)]
-    result = _best_above_threshold(with_token, 0.3)
-    if result:
-        return result
+    candidates = _ranked_above(with_token, 0.3)
 
     # Pass 2 (season 1 only): year-only entries like "Ted (2024)" that
     # AudioVault uses for shows not yet split into numbered seasons.
@@ -74,19 +74,24 @@ def find_season(results: list[dict], title: str, season: int) -> Optional[dict]:
             r for r in results
             if not any(tok in r["name"].lower() for tok in all_season_tokens)
         ]
-        result = _best_above_threshold(without_token, 0.4)
-        if result:
-            logger.info("Season 1 matched via year-only entry: %r", result["name"])
-            return result
+        pass2 = _ranked_above(without_token, 0.4)
+        if pass2:
+            logger.info("Season 1: also queued %d year-only fallback(s).", len(pass2))
+        candidates = candidates + pass2
 
-    return None
+    if not candidates:
+        logger.warning("No season %d candidates found for %r.", season, title)
+
+    return candidates
 
 
-def find_movie(results: list[dict], title: str, year: str) -> Optional[dict]:
+def find_movie(results: list[dict], title: str, year: str) -> list[dict]:
     """
-    Return the best result from *results* that matches *title* (and optionally *year*).
+    Return all results from *results* that plausibly match *title* (and
+    optionally *year*), ranked by score (best first).
 
-    Returns None if the best score is below a minimum threshold.
+    The caller should try each candidate in order, stopping on the first that
+    aligns above the score threshold.
     """
     title_lower = title.lower()
     scored: list[tuple[float, dict]] = []
@@ -100,20 +105,19 @@ def find_movie(results: list[dict], title: str, year: str) -> Optional[dict]:
 
         scored.append((score, result))
 
-    if not scored:
-        return None
-
     scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best = scored[0]
+    kept = [(s, r) for s, r in scored if s >= 0.3]
 
-    if best_score < 0.3:
+    for s, r in kept:
+        logger.info("Movie candidate: %r (score %.2f)", r["name"], s)
+
+    if scored and not kept:
         logger.warning(
-            "Best movie match %r has low similarity (%.2f) — skipping.", best["name"], best_score
+            "Best movie match %r has low similarity (%.2f) — skipping.",
+            scored[0][1]["name"], scored[0][0],
         )
-        return None
 
-    logger.info("Best movie match: %r (score %.2f)", best["name"], best_score)
-    return best
+    return [r for _, r in kept]
 
 
 # ------------------------------------------------------------------
