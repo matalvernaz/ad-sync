@@ -179,13 +179,13 @@ http://localhost:8686/retry?title=Ted&season=1&episode=3&path=/tv/ted/Season%201
 
 ### Whole season
 
-Provide `dir=` pointing to the season directory. ad-sync scans for video files and parses `SxxExx` from each filename automatically.
+Provide `dir=` pointing to the season directory. ad-sync scans for video files and parses `SxxExx` from each filename automatically. Files that don't match that pattern are skipped — check the container logs if fewer episodes than expected are processed.
 
 ```
-http://localhost:8686/retry?title=Ted&season=1&dir=/tv/ted/Season%201
+http://localhost:8686/retry?title=Ted&dir=/tv/ted/Season%201
 ```
 
-The `season=` parameter is optional here — it's used only to filter files if the directory contains episodes from multiple seasons.
+You can add `season=` to filter by season number if the directory happens to contain episodes from multiple seasons, but it's not needed when pointing at a single season directory.
 
 ### Whole show
 
