@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 # describealign prefixes output filenames with this by default.
 OUTPUT_PREFIX = "ad_"
 
+# Matches rate-change lines in describealign .txt reports, e.g.:
+#   Rate change of  10253.9% from  0:15:20.876 to  0:15:21.467 ...
+_SEG_RE = re.compile(
+    r"Rate change of\s+([-\d.]+)%\s+from\s+([\d:]+\.\d+)\s+to\s+([\d:]+\.\d+)"
+)
+
 
 def run(
     video_path: Path,
@@ -79,6 +85,21 @@ def run(
     return _find_output(video_path, output_dir)
 
 
+def _find_report(video_path: Path, alignment_dir: Path) -> Optional[Path]:
+    """Return the most relevant describealign .txt report for *video_path*."""
+    candidates = sorted(
+        alignment_dir.glob("*.txt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    stem = video_path.stem.lower()
+    # Prefer a file whose name contains the video stem; break ties by mtime.
+    candidates.sort(key=lambda p: (stem not in p.name.lower(), -p.stat().st_mtime))
+    return candidates[0]
+
+
 def parse_score(video_path: Path, alignment_dir: Path) -> float:
     """
     Parse the similarity score from the describealign text report.
@@ -90,34 +111,70 @@ def parse_score(video_path: Path, alignment_dir: Path) -> float:
 
     Returns the score as a float (0–100), or 0.0 if it cannot be found.
     """
-    # Prefer a report whose name contains the video stem; fall back to the
-    # most recently modified .txt in the directory.
-    candidates = sorted(
-        alignment_dir.glob("*.txt"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    txt_path = _find_report(video_path, alignment_dir)
+    if txt_path is None:
+        logger.warning("Could not parse alignment score from any report in %s.", alignment_dir)
+        return 0.0
 
-    stem = video_path.stem.lower()
-    candidates = sorted(
-        candidates,
-        key=lambda p: (stem not in p.name.lower(), -p.stat().st_mtime),
+    content = txt_path.read_text(errors="replace")
+    match = re.search(
+        r"(?:similarity|match)[^\d]*(\d+(?:\.\d+)?)\s*%",
+        content,
+        re.IGNORECASE,
     )
-
-    for txt_path in candidates:
-        content = txt_path.read_text(errors="replace")
-        match = re.search(
-            r"(?:similarity|match)[^\d]*(\d+(?:\.\d+)?)\s*%",
-            content,
-            re.IGNORECASE,
-        )
-        if match:
-            score = float(match.group(1))
-            logger.info("Alignment score: %.1f%% (from %s)", score, txt_path.name)
-            return score
+    if match:
+        score = float(match.group(1))
+        logger.info("Alignment score: %.1f%% (from %s)", score, txt_path.name)
+        return score
 
     logger.warning("Could not parse alignment score from any report in %s.", alignment_dir)
     return 0.0
+
+
+def content_score(video_path: Path, alignment_dir: Path) -> float:
+    """
+    Compute a content-coverage score (0–100) from the describealign .txt report.
+
+    Segments where |rate| > 500% and duration < 5 s are classified as
+    commercial-break seam artifacts and excluded from the denominator.
+    The returned value is the percentage of total video runtime covered by
+    the remaining stable, well-aligned segments.
+
+    Returns 0.0 if the report cannot be found or contains no segment data.
+    """
+    txt_path = _find_report(video_path, alignment_dir)
+    if txt_path is None:
+        return 0.0
+
+    content = txt_path.read_text(errors="replace")
+    total_dur = 0.0
+    stable_dur = 0.0
+
+    for m in _SEG_RE.finditer(content):
+        rate = float(m.group(1))
+        dur = _parse_tc(m.group(3)) - _parse_tc(m.group(2))
+        if dur <= 0:
+            continue
+        total_dur += dur
+        if not (abs(rate) > 500.0 and dur < 5.0):
+            stable_dur += dur
+
+    if total_dur == 0.0:
+        return 0.0
+
+    score = (stable_dur / total_dur) * 100.0
+    logger.info("Content coverage score: %.1f%% (from %s)", score, txt_path.name)
+    return score
+
+
+def _parse_tc(tc: str) -> float:
+    """Convert a H:MM:SS.fff or MM:SS.fff timecode string to seconds."""
+    parts = tc.split(":")
+    if len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    if len(parts) == 2:
+        return int(parts[0]) * 60 + float(parts[1])
+    return float(parts[0])
 
 
 # ------------------------------------------------------------------

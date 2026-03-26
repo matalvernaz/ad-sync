@@ -7,6 +7,7 @@ Request body is application/x-www-form-urlencoded (curl --data-urlencode).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -17,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .audiovault import AudioVaultClient, LoginError
 from .config import Config
-from .workflow import process_episode, process_movie
+from .workflow import process_episode, process_movie, _safe_dirname
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,8 @@ def _retry_dir(title: str, scan_dir: Path, season_filter: int | None) -> None:
         logger.warning("No video files found in %s", scan_dir)
         return
 
+    show_cache_dir = config.cache_dir / "shows" / _safe_dirname(title)
+
     for video_path in video_files:
         m = _EPISODE_RE.search(video_path.name)
         if not m:
@@ -274,5 +277,20 @@ def _retry_dir(title: str, scan_dir: Path, season_filter: int | None) -> None:
         episode = int(m.group(2))
         if season_filter is not None and season != season_filter:
             continue
+
+        # Skip episodes already successfully processed, so a re-trigger after
+        # restart doesn't re-embed the AD track on top of already-merged files.
+        done_path = show_cache_dir / f".done_s{season:02d}.json"
+        if done_path.exists():
+            try:
+                done = set(json.loads(done_path.read_text()))
+                if episode in done:
+                    logger.info(
+                        "Skipping S%02dE%02d — already in done list.", season, episode
+                    )
+                    continue
+            except (json.JSONDecodeError, ValueError):
+                pass
+
         with _lock:
             process_episode(client, config, video_path, title, season, episode)

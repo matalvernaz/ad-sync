@@ -17,7 +17,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from .aligner import run as align, parse_score
+from .aligner import run as align, parse_score, content_score
 from .audiovault import AudioVaultClient
 from .config import Config
 from .matcher import extract_episode, find_movie, find_season
@@ -124,19 +124,33 @@ def _align_and_keep(config: Config, video_path: Path, audio_path: Path) -> bool:
         return False
 
     score = parse_score(video_path, alignment_dir)
+    cscore = content_score(video_path, alignment_dir)
 
-    if score < config.min_score:
+    # Accept if either the describealign similarity score clears the threshold
+    # OR the content-coverage score does (≥90% of runtime in stable segments).
+    # The coverage score rescues episodes where commercial-break seams depress
+    # the headline similarity figure even though the alignment is structurally
+    # correct (short spike artifacts, 0% rate-change content segments).
+    desc_ok = score >= config.min_score
+    coverage_ok = cscore >= 90.0
+
+    if not desc_ok and not coverage_ok:
         logger.warning(
-            "Score %.1f%% is below the %.0f%% threshold — discarding combined file.",
-            score,
-            config.min_score,
+            "Score %.1f%% and content coverage %.1f%% both below thresholds — discarding.",
+            score, cscore,
         )
         combined.unlink(missing_ok=True)
         return False
 
+    if not desc_ok:
+        logger.info(
+            "Low similarity score (%.1f%%) but content coverage %.1f%% passes — accepting.",
+            score, cscore,
+        )
+
     # Replace the original video with the combined file.
     shutil.move(str(combined), video_path)
-    logger.info("Success (%.1f%%): replaced %s", score, video_path)
+    logger.info("Success (score=%.1f%% coverage=%.1f%%): replaced %s", score, cscore, video_path)
     return True
 
 
@@ -195,9 +209,12 @@ def _mark_episode_done(
     When the set of done episodes equals the number of audio files in the
     extracted zip, the zip and its extracted directory are deleted — they're
     no longer needed and just waste disk space.
+
+    The done-episodes file lives at the show level (not inside the season dir)
+    so that the zip cache cleanup doesn't erase it.
     """
     season_dir = zip_cache_dir / f"season_{season:02d}"
-    progress_path = season_dir / ".done_episodes.json"
+    progress_path = zip_cache_dir / f".done_s{season:02d}.json"
 
     done: set[int] = set()
     if progress_path.exists():
