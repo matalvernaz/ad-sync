@@ -67,6 +67,7 @@ def process_episode(
             )
             continue
         if _align_and_keep(config, video_path, audio_path):
+            _mark_episode_done(zip_cache_dir, season, episode, extract_dir, zip_path)
             return True
         logger.info("Candidate %r below threshold — trying next.", candidate["name"])
 
@@ -176,3 +177,58 @@ def _safe_dirname(name: str) -> str:
     """Convert an arbitrary string to a safe directory name."""
     name = re.sub(r"[^\w\s-]", "", name).strip()
     return re.sub(r"\s+", "_", name).lower()
+
+
+_AUDIO_EXTS = {".mp3", ".m4a", ".opus", ".wav", ".aac", ".flac", ".ac3", ".mka"}
+
+
+def _mark_episode_done(
+    zip_cache_dir: Path,
+    season: int,
+    episode: int,
+    extract_dir: Path,
+    zip_path: Path,
+) -> None:
+    """
+    Record *episode* as successfully processed for this season.
+
+    When the set of done episodes equals the number of audio files in the
+    extracted zip, the zip and its extracted directory are deleted — they're
+    no longer needed and just waste disk space.
+    """
+    season_dir = zip_cache_dir / f"season_{season:02d}"
+    progress_path = season_dir / ".done_episodes.json"
+
+    done: set[int] = set()
+    if progress_path.exists():
+        try:
+            done = set(json.loads(progress_path.read_text()))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    done.add(episode)
+    season_dir.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(json.dumps(sorted(done)))
+
+    # Count how many episodes are in the zip by looking at the extracted dir.
+    total = len([
+        f for f in extract_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in _AUDIO_EXTS
+    ]) if extract_dir.exists() else 0
+
+    if total > 0 and len(done) >= total:
+        logger.info(
+            "All %d episode(s) of season %d done — clearing zip cache.", total, season
+        )
+        zip_path.unlink(missing_ok=True)
+        # Remove zip from the download manifest.
+        manifest_path = zip_cache_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                manifest = {k: v for k, v in manifest.items() if Path(v) != zip_path}
+                manifest_path.write_text(json.dumps(manifest, indent=2))
+            except (json.JSONDecodeError, KeyError):
+                pass
+        # Delete the extracted dirs and progress file for this season.
+        shutil.rmtree(season_dir, ignore_errors=True)
