@@ -8,10 +8,11 @@ Request body is application/x-www-form-urlencoded (curl --data-urlencode).
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from .audiovault import AudioVaultClient, LoginError
 from .config import Config
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Prevent concurrent describealign runs (CPU/RAM heavy).
 _lock = threading.Lock()
+
+_VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".ts"}
+_EPISODE_RE = re.compile(r"[Ss](\d+)[Ee](\d+)")
 
 
 def serve(port: int = 8686) -> None:
@@ -45,6 +49,71 @@ class _HookHandler(BaseHTTPRequestHandler):
 
         self.send_response(200 if ok else 500)
         self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/retry":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        title = params.get("title", "").strip()
+        path_str = params.get("path", "").strip()
+        dir_str = params.get("dir", "").strip()
+        season_str = params.get("season", "").strip()
+        episode_str = params.get("episode", "").strip()
+        year_str = params.get("year", "").strip()
+
+        if not title:
+            self._respond(400, "Missing required parameter: title")
+            return
+
+        # Single-file retry (one episode or one movie).
+        if path_str:
+            if season_str and episode_str:
+                label = f"S{int(season_str):02d}E{int(episode_str):02d} of {title!r}"
+                threading.Thread(
+                    target=_retry_episode,
+                    args=(title, path_str, season_str, episode_str),
+                    daemon=True,
+                ).start()
+            else:
+                year_label = f" ({year_str})" if year_str else ""
+                label = f"movie {title!r}{year_label}"
+                threading.Thread(
+                    target=_retry_movie,
+                    args=(title, path_str, year_str),
+                    daemon=True,
+                ).start()
+            self._respond(202, f"Accepted — queued {label}, check container logs for progress")
+            return
+
+        # Directory retry (whole season or whole show).
+        if dir_str:
+            scan_dir = Path(dir_str)
+            if not scan_dir.is_dir():
+                self._respond(400, f"Directory does not exist: {dir_str}")
+                return
+            season_filter = int(season_str) if season_str else None
+            label = f"season {season_filter} of {title!r}" if season_filter else f"all seasons of {title!r}"
+            threading.Thread(
+                target=_retry_dir,
+                args=(title, scan_dir, season_filter),
+                daemon=True,
+            ).start()
+            self._respond(202, f"Accepted — queued {label}, check container logs for progress")
+            return
+
+        self._respond(400, "Provide path= (single file) or dir= (season or show directory)")
+
+    def _respond(self, code: int, message: str) -> None:
+        body = message.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, fmt, *args):
         logger.info(fmt, *args)
@@ -128,3 +197,93 @@ def _radarr(config: Config, env: dict[str, str]) -> bool:
         return False
 
     return process_movie(client, config, video_path, movie_title, movie_year)
+
+
+# ------------------------------------------------------------------
+# Retry helpers (run in background threads)
+# ------------------------------------------------------------------
+
+def _retry_episode(title: str, path_str: str, season_str: str, episode_str: str) -> None:
+    try:
+        config = Config.from_env()
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return
+
+    video_path = Path(path_str)
+    if not video_path.is_file():
+        logger.error("Video file does not exist: %s", video_path)
+        return
+
+    try:
+        season = int(season_str)
+        episode = int(episode_str)
+    except ValueError:
+        logger.error("Could not parse season/episode: %r / %r", season_str, episode_str)
+        return
+
+    try:
+        client = AudioVaultClient(config.email, config.password)
+    except LoginError as exc:
+        logger.error("AudioVault login failed: %s", exc)
+        return
+
+    with _lock:
+        process_episode(client, config, video_path, title, season, episode)
+
+
+def _retry_movie(title: str, path_str: str, year_str: str) -> None:
+    try:
+        config = Config.from_env()
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return
+
+    video_path = Path(path_str)
+    if not video_path.is_file():
+        logger.error("Video file does not exist: %s", video_path)
+        return
+
+    try:
+        client = AudioVaultClient(config.email, config.password)
+    except LoginError as exc:
+        logger.error("AudioVault login failed: %s", exc)
+        return
+
+    with _lock:
+        process_movie(client, config, video_path, title, year_str)
+
+
+def _retry_dir(title: str, scan_dir: Path, season_filter: int | None) -> None:
+    try:
+        config = Config.from_env()
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return
+
+    try:
+        client = AudioVaultClient(config.email, config.password)
+    except LoginError as exc:
+        logger.error("AudioVault login failed: %s", exc)
+        return
+
+    video_files = sorted(
+        f for f in scan_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in _VIDEO_EXTENSIONS
+    )
+
+    if not video_files:
+        logger.warning("No video files found in %s", scan_dir)
+        return
+
+    for video_path in video_files:
+        m = _EPISODE_RE.search(video_path.name)
+        if not m:
+            logger.warning("Could not parse SxxExx from %s — skipping", video_path.name)
+            continue
+        season = int(m.group(1))
+        episode = int(m.group(2))
+        if season_filter is not None and season != season_filter:
+            continue
+        with _lock:
+            process_episode(client, config, video_path, title, season, episode)

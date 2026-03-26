@@ -165,11 +165,59 @@ Downloaded season ZIPs are stored in `~/.cache/ad-sync/shows/<series>/` (or the 
 
 ---
 
+## Manual retry
+
+If AudioVault didn't have an audio description when a file was imported, use the `/retry` endpoint on the running server. All retry requests return **202 Accepted immediately** — processing happens in the background and progress is visible in the container logs.
+
+All paths must be paths *inside the ad-sync container*, which are the same as what Sonarr/Radarr see (i.e. the same volume mounts).
+
+### Single TV episode
+
+```
+http://localhost:8686/retry?title=Ted&season=1&episode=3&path=/tv/ted/Season%201/ted.S01E03.mkv
+```
+
+### Whole season
+
+Provide `dir=` pointing to the season directory. ad-sync scans for video files and parses `SxxExx` from each filename automatically.
+
+```
+http://localhost:8686/retry?title=Ted&season=1&dir=/tv/ted/Season%201
+```
+
+The `season=` parameter is optional here — it's used only to filter files if the directory contains episodes from multiple seasons.
+
+### Whole show
+
+Omit `season=` and point `dir=` at the show root. All seasons are queued and processed in order.
+
+```
+http://localhost:8686/retry?title=Ted&dir=/tv/ted
+```
+
+### Movie
+
+```
+http://localhost:8686/retry?title=Inception&year=2010&path=/movies/Inception/Inception.2010.mkv
+```
+
+`year=` is optional but improves matching when multiple results share the same title.
+
+---
+
+> **Accessing the endpoint:** If ad-sync is not exposed on port 8686 externally, trigger retries from another container on the same Docker network:
+> ```
+> curl "http://ad-sync:8686/retry?title=Ted&season=2&dir=/tv/ted/Season%202"
+> ```
+> Or open a shell into the ad-sync container and use curl from there.
+
+---
+
 ## Troubleshooting
 
 **"Login failed"** — Double-check your AudioVault credentials and run `ad-sync --test-auth`.
 
-**"No AudioVault results"** — The show or movie may not have an audio description on AudioVault yet.
+**"No AudioVault results"** — The show or movie may not have an audio description on AudioVault yet. Use the [manual retry](#manual-retry) endpoint once it becomes available.
 
 **"Score X% is below threshold"** — The audio description didn't align well with the video (possibly a different version/cut). The original file is untouched.
 
