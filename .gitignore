@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.env
+
+# Private source — credentials and implementation kept off the public repo
+ad_sync/living_audio.py

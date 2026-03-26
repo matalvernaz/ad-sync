@@ -22,6 +22,11 @@ from .audiovault import AudioVaultClient
 from .config import Config
 from .matcher import extract_episode, find_movie, find_season
 
+try:
+    from . import living_audio as _la
+except ImportError:
+    _la = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +76,15 @@ def process_episode(
             return True
         logger.info("Candidate %r below threshold — trying next.", candidate["name"])
 
+    if _la is not None:
+        client = _la.LivingAudioClient()
+        try:
+            audio_path = client.find_episode(config.cache_dir, series_title, season, episode)
+            if audio_path and _align_and_keep(config, video_path, audio_path):
+                return True
+        finally:
+            client.close()
+
     return False
 
 
@@ -105,6 +119,18 @@ def process_movie(
         if _align_and_keep(config, video_path, audio_path):
             return True
         logger.info("Candidate %r below threshold — trying next.", candidate["name"])
+
+    if _la is not None:
+        client = _la.LivingAudioClient()
+        try:
+            la_cache = config.cache_dir / "la_movies"
+            for candidate in client.search_movies(movie_title, movie_year):
+                audio_path = client.download(candidate["url"], la_cache)
+                if audio_path and _align_and_keep(config, video_path, audio_path):
+                    return True
+                logger.info("LivingAudio candidate %r below threshold — trying next.", candidate["name"])
+        finally:
+            client.close()
 
     return False
 
