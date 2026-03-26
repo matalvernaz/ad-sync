@@ -11,6 +11,10 @@ services:
       # These must match the container-side paths exactly (e.g. /tv, /movies).
       - /path/to/tv:/tv
       - /path/to/movies:/movies
+      # Persist the download cache and done-episode tracking across rebuilds.
+      # Without this, every image rebuild wipes the cache and done files,
+      # causing the retry endpoint to re-process already-merged episodes.
+      - /path/to/ad-sync-cache:/root/.cache/ad-sync
     networks:
       - arr-network   # must be the same network as Sonarr/Radarr
     restart: unless-stopped
