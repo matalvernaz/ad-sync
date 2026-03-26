@@ -35,6 +35,7 @@ def run(
     audio_path: Path,
     output_dir: Path,
     alignment_dir: Path,
+    stretch_audio: bool = True,
 ) -> Optional[Path]:
     """
     Run describealign on *video_path* + *audio_path*.
@@ -52,6 +53,8 @@ def run(
         "--output_dir", str(output_dir),
         "--alignment_dir", str(alignment_dir),
     ]
+    if stretch_audio:
+        cmd.append("--stretch_audio")
 
     logger.info("Running describealign: %s", " ".join(cmd))
 

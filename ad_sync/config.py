@@ -28,6 +28,7 @@ class Config:
     cache_dir: Path = field(
         default_factory=lambda: Path.home() / ".cache" / "ad-sync"
     )
+    stretch_audio: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -45,4 +46,6 @@ class Config:
         raw_cache = os.environ.get("AD_SYNC_CACHE_DIR", "")
         cache_dir = Path(raw_cache).expanduser() if raw_cache else Path.home() / ".cache" / "ad-sync"
 
-        return cls(email=email, password=password, min_score=min_score, cache_dir=cache_dir)
+        stretch_audio = os.environ.get("AD_SYNC_STRETCH_AUDIO", "true").strip().lower() != "false"
+
+        return cls(email=email, password=password, min_score=min_score, cache_dir=cache_dir, stretch_audio=stretch_audio)

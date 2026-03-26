@@ -144,7 +144,7 @@ def _align_and_keep(config: Config, video_path: Path, audio_path: Path) -> bool:
     alignment_dir = config.cache_dir / "alignments"
     tmp_output_dir = config.cache_dir / "output"
 
-    combined = align(video_path, audio_path, tmp_output_dir, alignment_dir)
+    combined = align(video_path, audio_path, tmp_output_dir, alignment_dir, config.stretch_audio)
     if combined is None:
         logger.error("Alignment produced no output file.")
         return False
