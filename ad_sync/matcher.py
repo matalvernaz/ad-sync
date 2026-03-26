@@ -28,6 +28,8 @@ def find_season(results: list[dict], title: str, season: int) -> Optional[dict]:
     Return the best result from *results* that matches *title* and *season*.
 
     Results are scored by title overlap; season must appear literally.
+    For season 1, also considers year-only entries (e.g. "Ted (2024)") that
+    AudioVault sometimes uses instead of "Ted - Season 1 (2024)".
     """
     season_tokens = {
         f"season {season:02d}",
@@ -38,31 +40,46 @@ def find_season(results: list[dict], title: str, season: int) -> Optional[dict]:
     }
 
     title_lower = title.lower()
-    scored: list[tuple[float, dict]] = []
 
-    for result in results:
-        name_lower = result["name"].lower()
+    def _best_above_threshold(candidates: list[dict], threshold: float) -> Optional[dict]:
+        scored = [(_title_similarity(title_lower, r["name"].lower()), r) for r in candidates]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        if not scored:
+            return None
+        best_score, best = scored[0]
+        if best_score < threshold:
+            logger.warning(
+                "Best season match %r has low similarity (%.2f) — skipping.",
+                best["name"], best_score,
+            )
+            return None
+        logger.info("Best season match: %r (score %.2f)", best["name"], best_score)
+        return best
 
-        if not any(tok in name_lower for tok in season_tokens):
-            continue
+    # Pass 1: results that explicitly name the season.
+    with_token = [r for r in results if any(tok in r["name"].lower() for tok in season_tokens)]
+    result = _best_above_threshold(with_token, 0.3)
+    if result:
+        return result
 
-        score = _title_similarity(title_lower, name_lower)
-        scored.append((score, result))
+    # Pass 2 (season 1 only): year-only entries like "Ted (2024)" that
+    # AudioVault uses for shows not yet split into numbered seasons.
+    if season == 1:
+        all_season_tokens = {
+            tok
+            for n in range(1, 20)
+            for tok in (f"season {n}", f"series {n}", f"s{n:02d}")
+        }
+        without_token = [
+            r for r in results
+            if not any(tok in r["name"].lower() for tok in all_season_tokens)
+        ]
+        result = _best_above_threshold(without_token, 0.4)
+        if result:
+            logger.info("Season 1 matched via year-only entry: %r", result["name"])
+            return result
 
-    if not scored:
-        return None
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best = scored[0]
-
-    if best_score < 0.3:
-        logger.warning(
-            "Best season match %r has low similarity (%.2f) — skipping.", best["name"], best_score
-        )
-        return None
-
-    logger.info("Best season match: %r (score %.2f)", best["name"], best_score)
-    return best
+    return None
 
 
 def find_movie(results: list[dict], title: str, year: str) -> Optional[dict]:
