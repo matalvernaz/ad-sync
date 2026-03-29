@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-from .audiovault import AudioVaultClient, DailyLimitReached, LoginError
+from .audiovault import AudioVaultClient, DailyLimitReached, DownloadLimiter, LoginError
 from .config import Config
 from .retry_queue import RetryQueue
 from .workflow import drain_retry_queue, process_episode, process_movie, _safe_dirname
@@ -85,36 +85,118 @@ def _midnight_drain_loop() -> None:
 
 
 class _HookHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path != "/hook":
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        env = {k: v[0] for k, v in parse_qs(body.decode()).items()}
-
-        try:
-            with _lock:
-                ok = _dispatch(env)
-        except Exception as exc:
-            logger.error("Unhandled error processing hook: %s", exc, exc_info=True)
-            self.send_response(500)
-            self.end_headers()
-            return
-
-        self.send_response(200 if ok else 500)
-        self.end_headers()
-
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path != "/retry":
+        path = parsed.path
+        params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+
+        if path == "/status":
+            self._handle_status()
+        elif path == "/queue":
+            self._handle_queue_get()
+        elif path == "/retry":
+            self._handle_retry(params)
+        else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/hook":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            env = {k: v[0] for k, v in parse_qs(body.decode()).items()}
+            try:
+                with _lock:
+                    ok = _dispatch(env)
+            except Exception as exc:
+                logger.error("Unhandled error processing hook: %s", exc, exc_info=True)
+                self.send_response(500)
+                self.end_headers()
+                return
+            self.send_response(200 if ok else 500)
+            self.end_headers()
+        elif parsed.path == "/drain":
+            self._handle_drain()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/queue":
+            self._handle_queue_delete()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    # ------------------------------------------------------------------
+    # Endpoint handlers
+    # ------------------------------------------------------------------
+
+    def _handle_status(self) -> None:
+        try:
+            config = Config.from_env()
+        except ValueError as exc:
+            self._respond(500, str(exc))
             return
 
-        params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        limiter_state = DownloadLimiter(config.cache_dir / "daily_limit.json")._load()
+        today = datetime.now().strftime("%Y-%m-%d")
+        if limiter_state.get("date") == today:
+            count = limiter_state.get("count", 0)
+        else:
+            count = 0
+        limit = DownloadLimiter.DAILY_LIMIT
+        queue = _get_retry_queue(config)
+        queued = len(queue.load())
+        now = datetime.now()
+        next_drain = (now + timedelta(days=1)).replace(
+            hour=0, minute=5, second=0, microsecond=0
+        )
+        self._respond_json(200, {
+            "date": today,
+            "downloads_today": count,
+            "limit": limit,
+            "remaining": max(0, limit - count),
+            "retry_queue": queued,
+            "next_drain": next_drain.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+
+    def _handle_queue_get(self) -> None:
+        try:
+            config = Config.from_env()
+        except ValueError as exc:
+            self._respond(500, str(exc))
+            return
+        items = _get_retry_queue(config).load()
+        self._respond_json(200, items)
+
+    def _handle_queue_delete(self) -> None:
+        try:
+            config = Config.from_env()
+        except ValueError as exc:
+            self._respond(500, str(exc))
+            return
+        queue = _get_retry_queue(config)
+        n = len(queue.load())
+        queue.clear()
+        self._respond(200, f"Cleared {n} item(s) from retry queue.")
+
+    def _handle_drain(self) -> None:
+        try:
+            config = Config.from_env()
+        except ValueError as exc:
+            self._respond(500, str(exc))
+            return
+        queue = _get_retry_queue(config)
+        if not queue.load():
+            self._respond(200, "Retry queue is empty — nothing to drain.")
+            return
+        threading.Thread(target=_do_drain, daemon=True).start()
+        self._respond(202, "Accepted — draining retry queue in background, check container logs for progress.")
+
+    def _handle_retry(self, params: dict) -> None:
         title = params.get("title", "").strip()
         path_str = params.get("path", "").strip()
         dir_str = params.get("dir", "").strip()
@@ -176,10 +258,22 @@ class _HookHandler(BaseHTTPRequestHandler):
 
         self._respond(400, "Provide path= (single file) or dir= (season or show directory)")
 
+    # ------------------------------------------------------------------
+    # Response helpers
+    # ------------------------------------------------------------------
+
     def _respond(self, code: int, message: str) -> None:
         body = message.encode()
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _respond_json(self, code: int, data) -> None:
+        body = json.dumps(data, indent=2).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
