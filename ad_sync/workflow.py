@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -183,7 +184,20 @@ def _align_and_keep(config: Config, video_path: Path, audio_path: Path) -> bool:
         )
 
     # Replace the original video with the combined file.
-    shutil.move(str(combined), video_path)
+    # shutil.move is non-atomic when source and destination are on different
+    # filesystems (e.g. separate Docker volume mounts): it copies then deletes,
+    # leaving the destination partially written if the process is killed mid-copy.
+    # Instead, copy to a sibling temp file and then os.replace (always atomic on
+    # POSIX even across most bind-mount configurations).
+    tmp_dest = video_path.parent / (video_path.name + ".tmp")
+    try:
+        shutil.copy2(combined, tmp_dest)
+        os.replace(tmp_dest, video_path)
+    except Exception:
+        tmp_dest.unlink(missing_ok=True)
+        raise
+    else:
+        combined.unlink(missing_ok=True)
     logger.info("Success (score=%.1f%% coverage=%.1f%%): replaced %s", score, cscore, video_path)
     return True
 

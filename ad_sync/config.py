@@ -42,6 +42,10 @@ class Config:
             )
 
         min_score = float(os.environ.get("AD_SYNC_MIN_SCORE", "65"))
+        if not 0.0 <= min_score <= 100.0:
+            raise ValueError(
+                f"AD_SYNC_MIN_SCORE must be between 0 and 100, got {min_score!r}"
+            )
 
         raw_cache = os.environ.get("AD_SYNC_CACHE_DIR", "")
         cache_dir = Path(raw_cache).expanduser() if raw_cache else Path.home() / ".cache" / "ad-sync"

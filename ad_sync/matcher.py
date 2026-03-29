@@ -161,7 +161,15 @@ def extract_episode(zip_path: Path, extract_dir: Path, episode: int) -> Optional
                 logger.info("Matched episode %02d → %s", episode, audio.name)
                 return audio
 
-    # Positional fallback (1-based).
+    # Positional fallback (1-based). Episode 0 is excluded: it means "special
+    # episode", and positional index -1 would be meaningless; the filename
+    # patterns above must match explicitly for specials.
+    if episode == 0:
+        logger.error(
+            "Episode 00 (special) not found — the zip filename must contain E00 or similar."
+        )
+        return None
+
     if 1 <= episode <= len(audio_files):
         chosen = audio_files[episode - 1]
         logger.warning(

@@ -58,8 +58,14 @@ class _HookHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         env = {k: v[0] for k, v in parse_qs(body.decode()).items()}
 
-        with _lock:
-            ok = _dispatch(env)
+        try:
+            with _lock:
+                ok = _dispatch(env)
+        except Exception as exc:
+            logger.error("Unhandled error processing hook: %s", exc, exc_info=True)
+            self.send_response(500)
+            self.end_headers()
+            return
 
         self.send_response(200 if ok else 500)
         self.end_headers()
@@ -86,7 +92,12 @@ class _HookHandler(BaseHTTPRequestHandler):
         # Single-file retry (one episode or one movie).
         if path_str:
             if season_str and episode_str:
-                label = f"S{int(season_str):02d}E{int(episode_str):02d} of {title!r}"
+                try:
+                    s, e = int(season_str), int(episode_str)
+                except ValueError:
+                    self._respond(400, "season and episode must be integers")
+                    return
+                label = f"S{s:02d}E{e:02d} of {title!r}"
                 threading.Thread(
                     target=_retry_episode,
                     args=(title, path_str, season_str, episode_str),
@@ -109,7 +120,14 @@ class _HookHandler(BaseHTTPRequestHandler):
             if not scan_dir.is_dir():
                 self._respond(400, f"Directory does not exist: {dir_str}")
                 return
-            season_filter = int(season_str) if season_str else None
+            if season_str:
+                try:
+                    season_filter = int(season_str)
+                except ValueError:
+                    self._respond(400, "season must be an integer")
+                    return
+            else:
+                season_filter = None
             label = f"season {season_filter} of {title!r}" if season_filter else f"all seasons of {title!r}"
             threading.Thread(
                 target=_retry_dir,

@@ -159,6 +159,11 @@ class AudioVaultClient:
                 timeout=30,
             )
             resp.raise_for_status()
+            if resp.url.rstrip("/").endswith("/login"):
+                logger.error(
+                    "AudioVault search failed after re-login — credentials may be invalid."
+                )
+                return []
         return _parse_results_table(resp.text)
 
     # ------------------------------------------------------------------
@@ -188,9 +193,13 @@ class AudioVaultClient:
             filename = re.sub(r'[\\/:*?"<>|]', "_", filename)
             dest = dest_dir / filename
 
-            with dest.open("wb") as fh:
-                for chunk in resp.iter_content(chunk_size=65_536):
-                    fh.write(chunk)
+            try:
+                with dest.open("wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=65_536):
+                        fh.write(chunk)
+            except Exception:
+                dest.unlink(missing_ok=True)
+                raise
 
         logger.info("Downloaded: %s", dest)
         return dest

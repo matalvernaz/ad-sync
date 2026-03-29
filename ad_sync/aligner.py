@@ -15,6 +15,7 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -44,6 +45,11 @@ def run(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     alignment_dir.mkdir(parents=True, exist_ok=True)
+
+    # Record the wall-clock time just before we launch the subprocess so that
+    # _find_output can reject any files that pre-date this run (stale outputs
+    # left over from a previous failed run).
+    run_start = time.time()
 
     cmd = [
         sys.executable, "-m", "describealign",
@@ -85,7 +91,7 @@ def run(
         logger.error("describealign exited with code %d.", result.returncode)
         return None
 
-    return _find_output(video_path, output_dir)
+    return _find_output(video_path, output_dir, run_start)
 
 
 def _find_report(video_path: Path, alignment_dir: Path) -> Optional[Path]:
@@ -184,7 +190,7 @@ def _parse_tc(tc: str) -> float:
 # Helpers
 # ------------------------------------------------------------------
 
-def _find_output(video_path: Path, output_dir: Path) -> Optional[Path]:
+def _find_output(video_path: Path, output_dir: Path, min_mtime: float = 0.0) -> Optional[Path]:
     """Locate the combined file that describealign created in output_dir."""
     stem = video_path.stem
     suffix = video_path.suffix
@@ -199,8 +205,13 @@ def _find_output(video_path: Path, output_dir: Path) -> Optional[Path]:
         if candidate.is_file():
             return candidate
 
-    # Last resort: newest file in output_dir.
-    files = [f for f in output_dir.iterdir() if f.is_file()]
+    # Last resort: newest file in output_dir that was created during this run.
+    # Filtering by min_mtime prevents returning a stale file left over from a
+    # previous run when the current run produced no output.
+    files = [
+        f for f in output_dir.iterdir()
+        if f.is_file() and f.stat().st_mtime >= min_mtime
+    ]
     if files:
         newest = max(files, key=lambda f: f.stat().st_mtime)
         logger.warning("Using newest output file as fallback: %s", newest.name)
