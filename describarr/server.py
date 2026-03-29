@@ -90,7 +90,11 @@ class _HookHandler(BaseHTTPRequestHandler):
         path = parsed.path
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
-        if path == "/status":
+        if path in ("/", ""):
+            self.send_response(302)
+            self.send_header("Location", "/status")
+            self.end_headers()
+        elif path == "/status":
             self._handle_status()
         elif path == "/queue":
             self._handle_queue_get()
