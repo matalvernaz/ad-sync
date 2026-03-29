@@ -17,4 +17,4 @@ COPY . .
 RUN pip install --no-cache-dir --no-deps .
 
 EXPOSE 8686
-CMD ["describearr", "serve"]
+CMD ["describarr", "serve"]

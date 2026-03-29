@@ -1,8 +1,8 @@
-# describearr
+# describarr
 
 Automatically syncs audio descriptions from [AudioVault](https://audiovault.net) with TV episodes and movies downloaded by [Sonarr](https://sonarr.tv) and [Radarr](https://radarr.video).
 
-When Sonarr or Radarr imports a new file, describearr:
+When Sonarr or Radarr imports a new file, describarr:
 
 1. Searches AudioVault for a matching audio description track.
 2. Downloads the file (caching season ZIPs so they are only fetched once per season).
@@ -30,7 +30,7 @@ AUDIOVAULT_EMAIL=your@email.com
 AUDIOVAULT_PASSWORD=yourpassword
 
 # Minimum alignment score to keep a combined file (default: 65)
-DESCRIBEARR_MIN_SCORE=65
+DESCRIBARR_MIN_SCORE=65
 ```
 
 Keep this file private (`chmod 600 .env`).
@@ -51,11 +51,11 @@ The container starts a small webhook server on port 8686 (internal only — no n
 
 Sonarr/Radarr execute Custom Scripts inside their own containers. The easiest place to drop a script that's already visible inside each container is their `config` volume (mounted at `/config`).
 
-Create `/path/to/sonarr/config/describearr-hook.sh`:
+Create `/path/to/sonarr/config/describarr-hook.sh`:
 
 ```sh
 #!/bin/sh
-curl -sf -X POST http://describearr:8686/hook \
+curl -sf -X POST http://describarr:8686/hook \
   --data-urlencode "sonarr_eventtype=$sonarr_eventtype" \
   --data-urlencode "sonarr_series_title=$sonarr_series_title" \
   --data-urlencode "sonarr_episodefile_seasonnumber=$sonarr_episodefile_seasonnumber" \
@@ -63,11 +63,11 @@ curl -sf -X POST http://describearr:8686/hook \
   --data-urlencode "sonarr_episodefile_path=$sonarr_episodefile_path"
 ```
 
-Create `/path/to/radarr/config/describearr-hook.sh`:
+Create `/path/to/radarr/config/describarr-hook.sh`:
 
 ```sh
 #!/bin/sh
-curl -sf -X POST http://describearr:8686/hook \
+curl -sf -X POST http://describarr:8686/hook \
   --data-urlencode "radarr_eventtype=$radarr_eventtype" \
   --data-urlencode "radarr_movie_title=$radarr_movie_title" \
   --data-urlencode "radarr_movie_year=$radarr_movie_year" \
@@ -77,8 +77,8 @@ curl -sf -X POST http://describearr:8686/hook \
 Make both executable:
 
 ```bash
-chmod +x /path/to/sonarr/config/describearr-hook.sh
-chmod +x /path/to/radarr/config/describearr-hook.sh
+chmod +x /path/to/sonarr/config/describarr-hook.sh
+chmod +x /path/to/radarr/config/describarr-hook.sh
 ```
 
 ### 4. Configure Sonarr and Radarr
@@ -87,10 +87,10 @@ In each app: **Settings → Connect → + → Custom Script**
 
 | Field | Value |
 |---|---|
-| Name | `describearr` |
+| Name | `describarr` |
 | On Import | ✅ |
 | On Upgrade | ✅ |
-| Path | `/config/describearr-hook.sh` |
+| Path | `/config/describarr-hook.sh` |
 
 Click **Test** — you should see a green tick. Then **Save**.
 
@@ -98,7 +98,7 @@ Click **Test** — you should see a green tick. Then **Save**.
 
 ## Setup — bare metal / non-Docker
 
-If Sonarr and Radarr run directly on the host (not in Docker), you can install describearr as a regular Python package and point the Custom Script at the binary.
+If Sonarr and Radarr run directly on the host (not in Docker), you can install describarr as a regular Python package and point the Custom Script at the binary.
 
 ### Install
 
@@ -119,15 +119,15 @@ pip install --no-deps git+https://github.com/matalvernaz/describarr.git
 ### Configure
 
 ```bash
-mkdir -p ~/.config/describearr
-cp .env.example ~/.config/describearr/.env
-nano ~/.config/describearr/.env
+mkdir -p ~/.config/describarr
+cp .env.example ~/.config/describarr/.env
+nano ~/.config/describarr/.env
 ```
 
 ### Verify credentials
 
 ```bash
-describearr --test-auth
+describarr --test-auth
 ```
 
 ### Set up in Sonarr / Radarr
@@ -136,10 +136,10 @@ describearr --test-auth
 
 | Field | Value |
 |---|---|
-| Name | `describearr` |
+| Name | `describarr` |
 | On Import | ✅ |
 | On Upgrade | ✅ |
-| Path | output of `which describearr` (e.g. `/usr/local/bin/describearr`) |
+| Path | output of `which describarr` (e.g. `/usr/local/bin/describarr`) |
 
 ---
 
@@ -147,7 +147,7 @@ describearr --test-auth
 
 ### TV episodes (Sonarr)
 
-AudioVault distributes audio descriptions for TV shows as ZIP files containing one MP3 per episode. describearr:
+AudioVault distributes audio descriptions for TV shows as ZIP files containing one MP3 per episode. describarr:
 
 1. Searches AudioVault for the series name and season number.
 2. Downloads the season ZIP (cached — only downloaded once per season).
@@ -157,11 +157,11 @@ AudioVault distributes audio descriptions for TV shows as ZIP files containing o
 
 ### Movies (Radarr)
 
-AudioVault distributes movie audio descriptions as individual MP3 files. describearr searches by title, downloads the file, and runs the same alignment + scoring step.
+AudioVault distributes movie audio descriptions as individual MP3 files. describarr searches by title, downloads the file, and runs the same alignment + scoring step.
 
 ### Caching
 
-Downloaded season ZIPs are stored in `~/.cache/describearr/shows/<series>/` (or the Docker container's cache) and are never re-downloaded for the same season.
+Downloaded season ZIPs are stored in `~/.cache/describarr/shows/<series>/` (or the Docker container's cache) and are never re-downloaded for the same season.
 
 ---
 
@@ -169,7 +169,7 @@ Downloaded season ZIPs are stored in `~/.cache/describearr/shows/<series>/` (or 
 
 If AudioVault didn't have an audio description when a file was imported, use the `/retry` endpoint on the running server. All retry requests return **202 Accepted immediately** — processing happens in the background and progress is visible in the container logs.
 
-All paths must be paths *inside the describearr container*, which are the same as what Sonarr/Radarr see (i.e. the same volume mounts).
+All paths must be paths *inside the describarr container*, which are the same as what Sonarr/Radarr see (i.e. the same volume mounts).
 
 ### Single TV episode
 
@@ -179,7 +179,7 @@ http://localhost:8686/retry?title=Ted&season=1&episode=3&path=/tv/ted/Season%201
 
 ### Whole season
 
-Provide `dir=` pointing to the season directory. describearr scans for video files and parses `SxxExx` from each filename automatically. Files that don't match that pattern are skipped — check the container logs if fewer episodes than expected are processed.
+Provide `dir=` pointing to the season directory. describarr scans for video files and parses `SxxExx` from each filename automatically. Files that don't match that pattern are skipped — check the container logs if fewer episodes than expected are processed.
 
 ```
 http://localhost:8686/retry?title=Ted&dir=/tv/ted/Season%201
@@ -205,29 +205,29 @@ http://localhost:8686/retry?title=Inception&year=2010&path=/movies/Inception/Inc
 
 ---
 
-> **Accessing the endpoint:** If describearr is not exposed on port 8686 externally, trigger retries from another container on the same Docker network:
+> **Accessing the endpoint:** If describarr is not exposed on port 8686 externally, trigger retries from another container on the same Docker network:
 > ```
-> curl "http://describearr:8686/retry?title=Ted&season=2&dir=/tv/ted/Season%202"
+> curl "http://describarr:8686/retry?title=Ted&season=2&dir=/tv/ted/Season%202"
 > ```
-> Or open a shell into the describearr container and use curl from there.
+> Or open a shell into the describarr container and use curl from there.
 
 ---
 
 ## Troubleshooting
 
-**"Login failed"** — Double-check your AudioVault credentials and run `describearr --test-auth`.
+**"Login failed"** — Double-check your AudioVault credentials and run `describarr --test-auth`.
 
 **"No AudioVault results"** — The show or movie may not have an audio description on AudioVault yet. Use the [manual retry](#manual-retry) endpoint once it becomes available.
 
 **"Score X% is below threshold"** — The audio description didn't align well with the video (possibly a different version/cut). The original file is untouched.
 
-**Green tick on Test but nothing happens on import** — Check that the hook script is executable and that the `describearr` container is on the same Docker network as Sonarr/Radarr.
+**Green tick on Test but nothing happens on import** — Check that the hook script is executable and that the `describarr` container is on the same Docker network as Sonarr/Radarr.
 
 ---
 
 ## Adjusting the score threshold
 
-Set `DESCRIBEARR_MIN_SCORE=50` in your `.env` to accept lower-quality alignments. The describealign documentation notes that scores below 20 % are likely mismatched files and scores above 90 % may indicate undescribed media.
+Set `DESCRIBARR_MIN_SCORE=50` in your `.env` to accept lower-quality alignments. The describealign documentation notes that scores below 20 % are likely mismatched files and scores above 90 % may indicate undescribed media.
 
 ---
 

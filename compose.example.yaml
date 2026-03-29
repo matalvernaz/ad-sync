@@ -1,11 +1,11 @@
 services:
-  describearr:
+  describarr:
     build: .
-    container_name: describearr
+    container_name: describarr
     environment:
       - AUDIOVAULT_EMAIL=${AUDIOVAULT_EMAIL}
       - AUDIOVAULT_PASSWORD=${AUDIOVAULT_PASSWORD}
-      - DESCRIBEARR_MIN_SCORE=${DESCRIBEARR_MIN_SCORE:-65}
+      - DESCRIBARR_MIN_SCORE=${DESCRIBARR_MIN_SCORE:-65}
     volumes:
       # Mount the same media paths that Sonarr/Radarr use inside their containers.
       # These must match the container-side paths exactly (e.g. /tv, /movies).
@@ -14,23 +14,23 @@ services:
       # Persist the download cache and done-episode tracking across rebuilds.
       # Without this, every image rebuild wipes the cache and done files,
       # causing the retry endpoint to re-process already-merged episodes.
-      - /path/to/describearr-cache:/root/.cache/describearr
+      - /path/to/describarr-cache:/root/.cache/describarr
     networks:
       - arr-network   # must be the same network as Sonarr/Radarr
     restart: unless-stopped
     labels:
       - traefik.enable=true
-      - traefik.http.routers.describearr.rule=Host(`describearr.example.com`)
-      - traefik.http.routers.describearr.entrypoints=websecure
-      - traefik.http.routers.describearr.tls=true
-      - traefik.http.routers.describearr.middlewares=sso@file
-      - traefik.http.services.describearr.loadbalancer.server.port=8686
+      - traefik.http.routers.describarr.rule=Host(`describarr.example.com`)
+      - traefik.http.routers.describarr.entrypoints=websecure
+      - traefik.http.routers.describarr.tls=true
+      - traefik.http.routers.describarr.middlewares=sso@file
+      - traefik.http.services.describarr.loadbalancer.server.port=8686
       # Favicon bypass — prevents SSO CSRF race condition on first load
-      - traefik.http.routers.describearr-favicon.rule=Host(`describearr.example.com`) && PathPrefix(`/favicon`)
-      - traefik.http.routers.describearr-favicon.priority=100
-      - traefik.http.routers.describearr-favicon.entrypoints=websecure
-      - traefik.http.routers.describearr-favicon.tls=true
-      - traefik.http.routers.describearr-favicon.service=describearr
+      - traefik.http.routers.describarr-favicon.rule=Host(`describarr.example.com`) && PathPrefix(`/favicon`)
+      - traefik.http.routers.describarr-favicon.priority=100
+      - traefik.http.routers.describarr-favicon.entrypoints=websecure
+      - traefik.http.routers.describarr-favicon.tls=true
+      - traefik.http.routers.describarr-favicon.service=describarr
 
 networks:
   arr-network:
