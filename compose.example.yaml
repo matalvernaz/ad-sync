@@ -1,11 +1,11 @@
 services:
-  ad-sync:
+  describearr:
     build: .
-    container_name: ad-sync
+    container_name: describearr
     environment:
       - AUDIOVAULT_EMAIL=${AUDIOVAULT_EMAIL}
       - AUDIOVAULT_PASSWORD=${AUDIOVAULT_PASSWORD}
-      - AD_SYNC_MIN_SCORE=${AD_SYNC_MIN_SCORE:-65}
+      - DESCRIBEARR_MIN_SCORE=${DESCRIBEARR_MIN_SCORE:-65}
     volumes:
       # Mount the same media paths that Sonarr/Radarr use inside their containers.
       # These must match the container-side paths exactly (e.g. /tv, /movies).
@@ -14,10 +14,23 @@ services:
       # Persist the download cache and done-episode tracking across rebuilds.
       # Without this, every image rebuild wipes the cache and done files,
       # causing the retry endpoint to re-process already-merged episodes.
-      - /path/to/ad-sync-cache:/root/.cache/ad-sync
+      - /path/to/describearr-cache:/root/.cache/describearr
     networks:
       - arr-network   # must be the same network as Sonarr/Radarr
     restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.describearr.rule=Host(`describearr.example.com`)
+      - traefik.http.routers.describearr.entrypoints=websecure
+      - traefik.http.routers.describearr.tls=true
+      - traefik.http.routers.describearr.middlewares=sso@file
+      - traefik.http.services.describearr.loadbalancer.server.port=8686
+      # Favicon bypass — prevents SSO CSRF race condition on first load
+      - traefik.http.routers.describearr-favicon.rule=Host(`describearr.example.com`) && PathPrefix(`/favicon`)
+      - traefik.http.routers.describearr-favicon.priority=100
+      - traefik.http.routers.describearr-favicon.entrypoints=websecure
+      - traefik.http.routers.describearr-favicon.tls=true
+      - traefik.http.routers.describearr-favicon.service=describearr
 
 networks:
   arr-network:

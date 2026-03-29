@@ -8,10 +8,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Search for .env in the current directory, then ~/.config/ad-sync/.env
+# Search for .env in the current directory, then ~/.config/describearr/.env
 _CONFIG_PATHS = [
     Path.cwd() / ".env",
-    Path.home() / ".config" / "ad-sync" / ".env",
+    Path.home() / ".config" / "describearr" / ".env",
 ]
 
 for _path in _CONFIG_PATHS:
@@ -26,7 +26,7 @@ class Config:
     password: str
     min_score: float = 65.0
     cache_dir: Path = field(
-        default_factory=lambda: Path.home() / ".cache" / "ad-sync"
+        default_factory=lambda: Path.home() / ".cache" / "describearr"
     )
     stretch_audio: bool = True
 
@@ -38,18 +38,18 @@ class Config:
         if not email or not password:
             raise ValueError(
                 "AUDIOVAULT_EMAIL and AUDIOVAULT_PASSWORD must be set. "
-                "Copy .env.example to ~/.config/ad-sync/.env and fill in your credentials."
+                "Copy .env.example to ~/.config/describearr/.env and fill in your credentials."
             )
 
-        min_score = float(os.environ.get("AD_SYNC_MIN_SCORE", "65"))
+        min_score = float(os.environ.get("DESCRIBEARR_MIN_SCORE", "65"))
         if not 0.0 <= min_score <= 100.0:
             raise ValueError(
-                f"AD_SYNC_MIN_SCORE must be between 0 and 100, got {min_score!r}"
+                f"DESCRIBEARR_MIN_SCORE must be between 0 and 100, got {min_score!r}"
             )
 
-        raw_cache = os.environ.get("AD_SYNC_CACHE_DIR", "")
-        cache_dir = Path(raw_cache).expanduser() if raw_cache else Path.home() / ".cache" / "ad-sync"
+        raw_cache = os.environ.get("DESCRIBEARR_CACHE_DIR", "")
+        cache_dir = Path(raw_cache).expanduser() if raw_cache else Path.home() / ".cache" / "describearr"
 
-        stretch_audio = os.environ.get("AD_SYNC_STRETCH_AUDIO", "true").strip().lower() != "false"
+        stretch_audio = os.environ.get("DESCRIBEARR_STRETCH_AUDIO", "true").strip().lower() != "false"
 
         return cls(email=email, password=password, min_score=min_score, cache_dir=cache_dir, stretch_audio=stretch_audio)

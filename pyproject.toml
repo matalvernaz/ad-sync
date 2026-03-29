@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ad-sync"
+name = "describearr"
 version = "0.1.0"
 description = "Automatically sync audio descriptions from AudioVault with Sonarr/Radarr downloads"
 readme = "README.md"
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-ad-sync = "ad_sync.__main__:main"
+describearr = "describearr.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ad_sync*"]
+include = ["describearr*"]

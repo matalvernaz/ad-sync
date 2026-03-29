@@ -1,5 +1,5 @@
 """
-Webhook server for ad-sync.
+Webhook server for describearr.
 
 Listens for POST /hook requests from Sonarr/Radarr shell wrappers.
 Request body is application/x-www-form-urlencoded (curl --data-urlencode).
@@ -58,7 +58,7 @@ _EPISODE_RE = re.compile(r"[Ss](\d+)[Ee](\d+)")
 
 def serve(port: int = 8686) -> None:
     server = HTTPServer(("0.0.0.0", port), _HookHandler)
-    logger.info("ad-sync webhook server listening on port %d", port)
+    logger.info("describearr webhook server listening on port %d", port)
     threading.Thread(target=_midnight_drain_loop, daemon=True).start()
     server.serve_forever()
 

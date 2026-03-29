@@ -1,9 +1,9 @@
 """
-Entry point for ad-sync.
+Entry point for describearr.
 
 Usage (manual):
-    python -m ad_sync              # driven by Sonarr/Radarr environment variables
-    python -m ad_sync --test-auth  # verify AudioVault credentials and exit
+    python -m describearr              # driven by Sonarr/Radarr environment variables
+    python -m describearr --test-auth  # verify AudioVault credentials and exit
 
 Sonarr/Radarr call this script automatically via their Custom Script connection.
 Environment variables are set by the arr application before the script is invoked.
@@ -26,7 +26,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s",
     stream=sys.stderr,
 )
-logger = logging.getLogger("ad-sync")
+logger = logging.getLogger("describearr")
 
 
 def main() -> None:
