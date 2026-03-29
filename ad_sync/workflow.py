@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from .aligner import run as align, parse_score, content_score
-from .audiovault import AudioVaultClient
+from .audiovault import AudioVaultClient, DailyLimitReached, DownloadLimiter
 from .config import Config
 from .matcher import extract_episode, find_movie, find_season
 
@@ -61,9 +61,13 @@ def process_episode(
     # Each candidate gets its own extract subdirectory so different zips don't
     # overwrite each other's extracted contents.
     zip_cache_dir = config.cache_dir / "shows" / _safe_dirname(series_title)
+    limiter = DownloadLimiter(config.cache_dir / "daily_limit.json")
 
     for candidate in candidates:
-        zip_path = _get_cached(client, candidate["url"], zip_cache_dir)
+        try:
+            zip_path = _get_cached(client, candidate["url"], zip_cache_dir, limiter)
+        except DailyLimitReached:
+            return False
         extract_dir = zip_cache_dir / f"season_{season:02d}" / _safe_dirname(candidate["name"])
         audio_path = extract_episode(zip_path, extract_dir, episode)
         if not audio_path:
@@ -113,9 +117,13 @@ def process_movie(
         return False
 
     movie_cache_dir = config.cache_dir / "movies"
+    limiter = DownloadLimiter(config.cache_dir / "daily_limit.json")
 
     for candidate in candidates:
-        audio_path = _get_cached(client, candidate["url"], movie_cache_dir)
+        try:
+            audio_path = _get_cached(client, candidate["url"], movie_cache_dir, limiter)
+        except DailyLimitReached:
+            return False
         if _align_and_keep(config, video_path, audio_path):
             return True
         logger.info("Candidate %r below threshold — trying next.", candidate["name"])
@@ -180,12 +188,21 @@ def _align_and_keep(config: Config, video_path: Path, audio_path: Path) -> bool:
     return True
 
 
-def _get_cached(client: AudioVaultClient, url: str, cache_dir: Path) -> Path:
+def _get_cached(
+    client: AudioVaultClient,
+    url: str,
+    cache_dir: Path,
+    limiter: Optional[DownloadLimiter] = None,
+) -> Path:
     """
     Return a locally cached copy of *url*, downloading if necessary.
 
     A JSON manifest (manifest.json) in *cache_dir* maps URL → local path so
     that subsequent calls skip the network entirely.
+
+    If *limiter* is provided it is checked (and incremented) before any actual
+    HTTP download so we never exceed AudioVault's 25-downloads-per-day cap.
+    Cache hits bypass the limiter entirely.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = cache_dir / "manifest.json"
@@ -204,6 +221,15 @@ def _get_cached(client: AudioVaultClient, url: str, cache_dir: Path) -> Path:
             return cached
         # Stale entry — file was deleted; fall through to re-download.
         logger.warning("Cached file missing, re-downloading: %s", url)
+
+    if limiter is not None:
+        try:
+            limiter.check_and_increment()
+        except DailyLimitReached:
+            logger.error(
+                "Skipping download of %s — AudioVault daily limit reached.", url
+            )
+            raise
 
     file_path = client.download(url, cache_dir)
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,53 @@ _HEADERS = {
 
 class LoginError(RuntimeError):
     """Raised when AudioVault login fails."""
+
+
+class DailyLimitReached(RuntimeError):
+    """Raised when the AudioVault 25-downloads-per-day limit would be exceeded."""
+
+
+class DownloadLimiter:
+    """
+    Tracks AudioVault downloads against the 25-per-day limit.
+
+    State is persisted to *state_path* as a small JSON file so the count
+    survives process restarts.  The date resets automatically at midnight.
+    """
+
+    DAILY_LIMIT = 25
+
+    def __init__(self, state_path: Path) -> None:
+        self._path = state_path
+
+    def check_and_increment(self) -> None:
+        """Increment the counter or raise DailyLimitReached."""
+        today = date.today().isoformat()
+        state = self._load()
+        if state.get("date") != today:
+            state = {"date": today, "count": 0}
+        if state["count"] >= self.DAILY_LIMIT:
+            raise DailyLimitReached(
+                f"AudioVault daily download limit ({self.DAILY_LIMIT}) reached. "
+                "The counter resets at midnight."
+            )
+        state["count"] += 1
+        self._save(state)
+        logger.info(
+            "AudioVault downloads today: %d/%d", state["count"], self.DAILY_LIMIT
+        )
+
+    def _load(self) -> dict:
+        if self._path.exists():
+            try:
+                return json.loads(self._path.read_text())
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return {}
+
+    def _save(self, state: dict) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(state))
 
 
 class AudioVaultClient:
