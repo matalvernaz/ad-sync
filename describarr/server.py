@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -35,6 +36,34 @@ _client_lock = threading.Lock()
 # Shared retry queue.
 _retry_queue: Optional[RetryQueue] = None
 _retry_queue_lock = threading.Lock()
+
+# Current job being processed (set while _lock is held).
+_current_job: Optional[dict] = None
+
+
+@contextmanager
+def _set_current_job(info: dict):
+    global _current_job
+    _current_job = {"started_at": datetime.now().isoformat(), **info}
+    try:
+        yield
+    finally:
+        _current_job = None
+
+
+def _elapsed(iso_start: str) -> str:
+    """Human-readable elapsed time from an ISO datetime string."""
+    try:
+        delta = datetime.now() - datetime.fromisoformat(iso_start)
+        secs = int(delta.total_seconds())
+    except Exception:
+        return "unknown"
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m {secs % 60}s"
+    h, rem = divmod(secs, 3600)
+    return f"{h}h {rem // 60}m"
 
 
 def _get_client(config: Config) -> AudioVaultClient:
@@ -81,7 +110,8 @@ def _midnight_drain_loop() -> None:
             continue
         client = _get_client(config)
         with _lock:
-            drain_retry_queue(queue, client, config)
+            with _set_current_job({"type": "drain", "title": "retry queue drain"}):
+                drain_retry_queue(queue, client, config)
 
 
 class _HookHandler(BaseHTTPRequestHandler):
@@ -155,14 +185,23 @@ class _HookHandler(BaseHTTPRequestHandler):
         next_drain = (now + timedelta(days=1)).replace(
             hour=0, minute=5, second=0, microsecond=0
         )
-        self._respond_json(200, {
+        data = {
             "date": today,
             "downloads_today": count,
             "limit": limit,
             "remaining": max(0, limit - count),
             "retry_queue": queued,
             "next_drain": next_drain.strftime("%Y-%m-%dT%H:%M:%S"),
-        })
+            "current_job": _current_job,
+        }
+
+        accept = self.headers.get("Accept", "")
+        parsed = urlparse(self.path)
+        fmt = parse_qs(parsed.query).get("format", [None])[0]
+        if fmt == "json" or ("text/html" not in accept and fmt != "html"):
+            self._respond_json(200, data)
+        else:
+            self._respond_html(200, _render_status_html(data))
 
     def _handle_queue_get(self) -> None:
         try:
@@ -279,8 +318,87 @@ class _HookHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _respond_html(self, code: int, html: str) -> None:
+        body = html.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, fmt, *args):
         logger.info(fmt, *args)
+
+
+def _render_status_html(data: dict) -> str:
+    job = data["current_job"]
+    if job:
+        jtype = job.get("type", "")
+        if jtype == "movie":
+            year = f" ({job['year']})" if job.get("year") else ""
+            job_label = f"{job['title']}{year}"
+        elif jtype == "episode":
+            job_label = f"{job['title']} S{job['season']:02d}E{job['episode']:02d}"
+        else:
+            job_label = job.get("title", "unknown")
+        elapsed = _elapsed(job["started_at"])
+        job_html = f"""
+  <div class="card active">
+    <h2>Currently converting</h2>
+    <div class="value">{job_label}</div>
+    <div class="meta">Running for {elapsed}</div>
+  </div>"""
+    else:
+        job_html = """
+  <div class="card">
+    <h2>Currently converting</h2>
+    <div class="value idle">Idle</div>
+  </div>"""
+
+    next_drain_dt = datetime.fromisoformat(data["next_drain"])
+    next_drain_str = next_drain_dt.strftime("%b %-d at %-I:%M %p")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30">
+  <title>describarr status</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; max-width: 560px; margin: 2rem auto; padding: 0 1rem; color: #111; }}
+    h1 {{ margin-bottom: 0.1rem; }}
+    .subtitle {{ color: #666; margin-top: 0; font-size: 0.9rem; }}
+    .cards {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1rem; }}
+    .card {{ border: 1px solid #ddd; border-radius: 8px; padding: 0.85rem 1rem; }}
+    .card.wide {{ grid-column: 1 / -1; }}
+    .card.active {{ border-color: #f0a000; background: #fffbec; }}
+    h2 {{ margin: 0 0 0.35rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #888; }}
+    .value {{ font-size: 1.35rem; font-weight: 600; }}
+    .value.idle {{ color: #aaa; font-weight: 400; }}
+    .meta {{ color: #888; font-size: 0.8rem; margin-top: 0.2rem; }}
+    .footer {{ color: #bbb; font-size: 0.75rem; margin-top: 1.5rem; }}
+  </style>
+</head>
+<body>
+  <h1>describarr</h1>
+  <p class="subtitle">Audio description sync &mdash; {data['date']}</p>
+  <div class="cards">
+  <div class="card wide">{job_html.strip()}</div>
+  <div class="card">
+    <h2>Downloads today</h2>
+    <div class="value">{data['downloads_today']} <span style="font-size:1rem;color:#888">/ {data['limit']}</span></div>
+    <div class="meta">{data['remaining']} remaining</div>
+  </div>
+  <div class="card">
+    <h2>Retry queue</h2>
+    <div class="value">{data['retry_queue']}</div>
+    <div class="meta">Next drain: {next_drain_str}</div>
+  </div>
+  </div>
+  <p class="footer">Auto-refreshes every 30 seconds &middot; <a href="/status?format=json">JSON</a></p>
+</body>
+</html>"""
 
 
 def _dispatch(env: dict[str, str]) -> bool:
@@ -333,7 +451,8 @@ def _sonarr(config: Config, env: dict[str, str]) -> bool:
 
     client = _get_client(config)
     try:
-        return process_episode(client, config, video_path, series_title, season, episode)
+        with _set_current_job({"type": "episode", "title": series_title, "season": season, "episode": episode}):
+            return process_episode(client, config, video_path, series_title, season, episode)
     except DailyLimitReached:
         _get_retry_queue(config).add_episode(series_title, season, episode, str(video_path))
         return False
@@ -355,7 +474,8 @@ def _radarr(config: Config, env: dict[str, str]) -> bool:
 
     client = _get_client(config)
     try:
-        return process_movie(client, config, video_path, movie_title, movie_year)
+        with _set_current_job({"type": "movie", "title": movie_title, "year": movie_year}):
+            return process_movie(client, config, video_path, movie_title, movie_year)
     except DailyLimitReached:
         _get_retry_queue(config).add_movie(movie_title, movie_year, str(video_path))
         return False
@@ -386,7 +506,8 @@ def _retry_episode(title: str, path_str: str, season_str: str, episode_str: str)
 
     client = _get_client(config)
     with _lock:
-        process_episode(client, config, video_path, title, season, episode)
+        with _set_current_job({"type": "episode", "title": title, "season": season, "episode": episode}):
+            process_episode(client, config, video_path, title, season, episode)
 
 
 def _retry_movie(title: str, path_str: str, year_str: str) -> None:
@@ -403,7 +524,8 @@ def _retry_movie(title: str, path_str: str, year_str: str) -> None:
 
     client = _get_client(config)
     with _lock:
-        process_movie(client, config, video_path, title, year_str)
+        with _set_current_job({"type": "movie", "title": title, "year": year_str}):
+            process_movie(client, config, video_path, title, year_str)
 
 
 def _retry_dir(title: str, scan_dir: Path, season_filter: int | None) -> None:
@@ -451,4 +573,5 @@ def _retry_dir(title: str, scan_dir: Path, season_filter: int | None) -> None:
                 pass
 
         with _lock:
-            process_episode(client, config, video_path, title, season, episode)
+            with _set_current_job({"type": "episode", "title": title, "season": season, "episode": episode}):
+                process_episode(client, config, video_path, title, season, episode)
